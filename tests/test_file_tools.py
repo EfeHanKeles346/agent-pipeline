@@ -120,6 +120,38 @@ def test_read_workspace_files_ignores_ignored_directories(tmp_path: Path):
     assert "src/main.py" in result
 
 
+def test_read_workspace_files_includes_cpp_and_makefiles(tmp_path: Path):
+    (tmp_path / "CMakeLists.txt").write_text("project(Demo)\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+    (tmp_path / "include").mkdir()
+    (tmp_path / "include" / "demo.hpp").write_text("#pragma once\n", encoding="utf-8")
+
+    result = file_tools.read_workspace_files(workspace_dir=str(tmp_path))
+
+    assert "### `CMakeLists.txt`" in result
+    assert "### `src/main.cpp`" in result
+    assert "### `include/demo.hpp`" in result
+    assert result.index("### `CMakeLists.txt`") < result.index("### `src/main.cpp`")
+
+
+def test_read_workspace_files_ignores_language_build_dirs(tmp_path: Path):
+    for dirname in ("target", "vendor", "cmake-build-debug"):
+        path = tmp_path / dirname
+        path.mkdir()
+        (path / "ignored.txt").write_text("ignored", encoding="utf-8")
+
+    (tmp_path / "Cargo.toml").write_text("[package]\nname='demo'\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
+
+    result = file_tools.read_workspace_files(workspace_dir=str(tmp_path))
+
+    assert "ignored.txt" not in result
+    assert "Cargo.toml" in result
+    assert "src/main.rs" in result
+
+
 def test_read_todolist_parses_tasks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     todo = tmp_path / "todolist.md"
     todo.write_text("- [ ] First task\n- [x] Done task\n", encoding="utf-8")

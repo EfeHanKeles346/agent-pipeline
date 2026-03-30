@@ -51,6 +51,10 @@ ENABLE_COMMITTER = False  # Git repo yokken gereksiz — repo oluşunca aktif et
 # Task'lar arası bekleme süresi (saniye) — rate limit koruması
 TASK_COOLDOWN_SECONDS = 5
 
+# Shell komutları için temel timeout değerleri (saniye)
+INSTALL_TIMEOUT_SECONDS = 300
+BUILD_TIMEOUT_SECONDS = 300
+
 # ============================================
 # DOSYA YOLLARI
 # ============================================

@@ -92,18 +92,149 @@ def detect_project_type(workspace_dir: str = None) -> str:
     Workspace'teki projenin tipini algıla.
 
     Returns:
-        "node" | "python" | "unknown"
+        "node" | "python" | "go" | "rust" | "java_maven" | "java_gradle" |
+        "cpp_cmake" | "cpp_make" | "dotnet" | "unknown"
     """
     if workspace_dir is None:
         workspace_dir = config.WORKSPACE_DIR
 
-    if os.path.exists(os.path.join(workspace_dir, "package.json")):
+    if _root_has_file(workspace_dir, "package.json"):
         return "node"
-    if os.path.exists(os.path.join(workspace_dir, "requirements.txt")):
+
+    if _root_has_any_file(workspace_dir, ("requirements.txt", "pyproject.toml", "setup.py")):
         return "python"
-    if os.path.exists(os.path.join(workspace_dir, "pyproject.toml")):
-        return "python"
+
+    if _root_has_file(workspace_dir, "go.mod"):
+        return "go"
+
+    if _root_has_file(workspace_dir, "Cargo.toml"):
+        return "rust"
+
+    if _root_has_file(workspace_dir, "pom.xml"):
+        return "java_maven"
+
+    if _root_has_any_file(workspace_dir, ("build.gradle", "build.gradle.kts")):
+        return "java_gradle"
+
+    if _find_file_with_suffix(workspace_dir, (".csproj", ".sln")):
+        return "dotnet"
+
+    if _root_has_file(workspace_dir, "CMakeLists.txt"):
+        return "cpp_cmake"
+
+    if _root_has_file(workspace_dir, "Makefile"):
+        return "cpp_make"
+
     return "unknown"
+
+
+def get_install_command(project_type: str, workspace_dir: str = None) -> str | None:
+    """Proje tipine gore dependency kurulum komutunu don."""
+    if workspace_dir is None:
+        workspace_dir = config.WORKSPACE_DIR
+
+    if project_type == "node":
+        return "npm install"
+
+    if project_type == "python":
+        if _root_has_file(workspace_dir, "requirements.txt"):
+            return "pip install -r requirements.txt"
+        if _root_has_any_file(workspace_dir, ("pyproject.toml", "setup.py")):
+            return "pip install -e ."
+        return None
+
+    if project_type == "go":
+        return "go mod download"
+
+    if project_type == "rust":
+        return "cargo fetch"
+
+    if project_type == "java_maven":
+        return "./mvnw dependency:resolve" if _root_has_file(workspace_dir, "mvnw") else "mvn dependency:resolve"
+
+    if project_type == "java_gradle":
+        return "./gradlew dependencies" if _root_has_file(workspace_dir, "gradlew") else "gradle dependencies"
+
+    if project_type == "cpp_cmake":
+        return "mkdir -p build && cd build && cmake .."
+
+    if project_type == "dotnet":
+        return "dotnet restore"
+
+    return None
+
+
+def get_build_command(project_type: str, workspace_dir: str = None) -> str | None:
+    """Proje tipine gore build veya compile kontrol komutunu don."""
+    if workspace_dir is None:
+        workspace_dir = config.WORKSPACE_DIR
+
+    if project_type == "node":
+        return "npm run build"
+
+    if project_type == "python":
+        return "python -m compileall -q ."
+
+    if project_type == "go":
+        return "go build ./..."
+
+    if project_type == "rust":
+        return "cargo build"
+
+    if project_type == "java_maven":
+        return "./mvnw compile" if _root_has_file(workspace_dir, "mvnw") else "mvn compile"
+
+    if project_type == "java_gradle":
+        return "./gradlew build" if _root_has_file(workspace_dir, "gradlew") else "gradle build"
+
+    if project_type == "cpp_cmake":
+        return "mkdir -p build && cd build && cmake .. && cmake --build ."
+
+    if project_type == "cpp_make":
+        return "make"
+
+    if project_type == "dotnet":
+        return "dotnet build"
+
+    return None
+
+
+def get_dev_server_command(project_type: str, workspace_dir: str = None) -> str | None:
+    """Proje tipine gore calistirma komutunu belirle."""
+    if workspace_dir is None:
+        workspace_dir = config.WORKSPACE_DIR
+
+    if project_type == "node":
+        pkg_json_path = os.path.join(workspace_dir, "package.json")
+        return _detect_node_start_cmd(pkg_json_path)
+
+    if project_type == "python":
+        return _detect_python_start_cmd(workspace_dir)
+
+    if project_type == "go":
+        if _root_has_file(workspace_dir, "main.go") or _find_file_with_suffix(workspace_dir, (".go",)):
+            return "go run ."
+        return None
+
+    if project_type == "rust":
+        return "cargo run"
+
+    if project_type == "cpp_cmake":
+        return _detect_cpp_start_cmd(workspace_dir, build_dir_name="build")
+
+    if project_type == "cpp_make":
+        return _detect_cpp_start_cmd(workspace_dir, build_dir_name=None)
+
+    if project_type == "java_maven":
+        return "./mvnw exec:java" if _root_has_file(workspace_dir, "mvnw") else "mvn exec:java"
+
+    if project_type == "java_gradle":
+        return "./gradlew run" if _root_has_file(workspace_dir, "gradlew") else "gradle run"
+
+    if project_type == "dotnet":
+        return "dotnet run"
+
+    return None
 
 
 def auto_install_dependencies(workspace_dir: str = None) -> dict | None:
@@ -118,26 +249,16 @@ def auto_install_dependencies(workspace_dir: str = None) -> dict | None:
         workspace_dir = config.WORKSPACE_DIR
 
     project_type = detect_project_type(workspace_dir)
+    install_cmd = get_install_command(project_type, workspace_dir)
+    if not install_cmd:
+        return None
 
-    if project_type == "node":
-        pkg_json = os.path.join(workspace_dir, "package.json")
-        node_modules = os.path.join(workspace_dir, "node_modules")
-
-        if os.path.exists(pkg_json):
-            print("\n  package.json bulundu — npm install çalıştırılıyor...")
-            return run_command("npm install", cwd=workspace_dir, timeout=180)
-
-    elif project_type == "python":
-        req_txt = os.path.join(workspace_dir, "requirements.txt")
-        if os.path.exists(req_txt):
-            print("\n  requirements.txt bulundu — pip install çalıştırılıyor...")
-            return run_command(
-                "pip install -r requirements.txt",
-                cwd=workspace_dir,
-                timeout=180,
-            )
-
-    return None
+    print(f"\n  Dependency kurulumu çalıştırılıyor ({project_type}): {install_cmd}")
+    return run_command(
+        install_cmd,
+        cwd=workspace_dir,
+        timeout=config.INSTALL_TIMEOUT_SECONDS,
+    )
 
 
 _dev_server_process = None
@@ -165,22 +286,18 @@ def start_dev_server(workspace_dir: str = None) -> dict:
 
     project_type = detect_project_type(workspace_dir)
 
-    if project_type == "node":
-        pkg_json_path = os.path.join(workspace_dir, "package.json")
-        cmd = _detect_node_start_cmd(pkg_json_path)
-    elif project_type == "python":
-        cmd = _detect_python_start_cmd(workspace_dir)
-    else:
+    cmd = get_dev_server_command(project_type, workspace_dir)
+    if project_type == "unknown":
         return {
             "success": False,
-            "message": "Proje tipi algılanamadı (package.json veya requirements.txt bulunamadı)",
+            "message": "Proje tipi algılanamadı",
             "pid": None,
         }
 
     if not cmd:
         return {
             "success": False,
-            "message": "Başlatma komutu algılanamadı",
+            "message": f"Başlatma komutu algılanamadı ({project_type})",
             "pid": None,
         }
 
@@ -201,6 +318,7 @@ def start_dev_server(workspace_dir: str = None) -> dict:
         return {
             "success": True,
             "message": f"Dev server başlatıldı (PID: {_dev_server_process.pid}) — {cmd}",
+            "command": cmd,
             "pid": _dev_server_process.pid,
         }
 
@@ -208,6 +326,7 @@ def start_dev_server(workspace_dir: str = None) -> dict:
         return {
             "success": False,
             "message": f"Dev server başlatılamadı: {e}",
+            "command": cmd,
             "pid": None,
         }
 
@@ -249,4 +368,58 @@ def _detect_python_start_cmd(workspace_dir: str) -> str | None:
             if candidate == "manage.py":
                 return "python manage.py runserver"
             return f"python {candidate}"
+    return None
+
+
+def _root_has_file(workspace_dir: str, filename: str) -> bool:
+    return os.path.exists(os.path.join(workspace_dir, filename))
+
+
+def _root_has_any_file(workspace_dir: str, filenames: tuple[str, ...]) -> bool:
+    return any(_root_has_file(workspace_dir, filename) for filename in filenames)
+
+
+def _find_file_with_suffix(workspace_dir: str, suffixes: tuple[str, ...]) -> str | None:
+    try:
+        for root, dirs, files in os.walk(workspace_dir):
+            dirs.sort()
+            for filename in sorted(files):
+                if filename.endswith(suffixes):
+                    return os.path.join(root, filename)
+    except OSError:
+        return None
+    return None
+
+
+def _detect_cpp_start_cmd(workspace_dir: str, build_dir_name: str | None) -> str | None:
+    search_dir = workspace_dir if build_dir_name is None else os.path.join(workspace_dir, build_dir_name)
+    if not os.path.isdir(search_dir):
+        return None
+
+    executable = _find_executable(search_dir)
+    if not executable:
+        return None
+
+    rel_path = os.path.relpath(executable, workspace_dir)
+    return f"./{rel_path}"
+
+
+def _find_executable(search_dir: str) -> str | None:
+    skipped_dirs = {"CMakeFiles", ".git", "__pycache__", "Testing", "_deps"}
+    skipped_suffixes = (".o", ".a", ".so", ".dylib", ".dll", ".txt", ".cmake", ".ninja")
+
+    try:
+        for root, dirs, files in os.walk(search_dir):
+            dirs[:] = [dirname for dirname in dirs if dirname not in skipped_dirs]
+            dirs.sort()
+
+            for filename in sorted(files):
+                full_path = os.path.join(root, filename)
+                if filename.endswith(skipped_suffixes):
+                    continue
+                if os.path.isfile(full_path) and os.access(full_path, os.X_OK):
+                    return full_path
+    except OSError:
+        return None
+
     return None

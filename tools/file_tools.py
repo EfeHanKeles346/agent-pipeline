@@ -5,12 +5,19 @@ Dosya işlemleri — memory.md okuma, todolist yönetimi, log yazma, kod kaydetm
 import os
 import re
 import json
+from fnmatch import fnmatch
 from datetime import datetime
 import config
 
 IGNORED_DIRS = {
     "node_modules", "__pycache__", ".git", ".next", ".vite",
     "dist", "build", ".cache", ".turbo", "coverage", ".nuxt",
+    "target", "vendor", "bin", "obj", ".gradle", "out",
+    "cmake-build-debug", "cmake-build-release",
+}
+
+IGNORED_DIR_PATTERNS = {
+    "cmake-build-*",
 }
 
 IGNORED_FILES = {
@@ -23,7 +30,71 @@ TEXT_EXTENSIONS = {
     ".json", ".md", ".txt", ".yaml", ".yml", ".toml", ".cfg", ".ini",
     ".env", ".sh", ".bash", ".sql", ".graphql", ".svelte", ".vue",
     ".xml", ".csv", ".lock", ".config", ".mjs", ".cjs",
+    ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx",
+    ".go",
+    ".rs",
+    ".java", ".kt", ".kts", ".gradle",
+    ".cs", ".csproj", ".sln",
+    ".rb", ".php", ".swift", ".dart", ".zig",
+    ".properties",
 }
+
+SPECIAL_TEXT_FILES = {
+    "Makefile",
+    "CMakeLists.txt",
+    "Dockerfile",
+    "Vagrantfile",
+    "Gemfile",
+    "go.mod",
+    "go.sum",
+}
+
+CONFIG_FILENAMES = {
+    "package.json",
+    "tsconfig.json",
+    "vite.config.ts",
+    "tailwind.config.js",
+    "webpack.config.js",
+    "next.config.js",
+    ".eslintrc.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "setup.py",
+    "CMakeLists.txt",
+    "Makefile",
+    "go.mod",
+    "go.sum",
+    "Cargo.toml",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "Dockerfile",
+    "Gemfile",
+}
+
+CONFIG_EXTENSIONS = {
+    ".csproj",
+    ".sln",
+}
+
+
+def _should_ignore_dir(dirname: str) -> bool:
+    """Literal veya pattern tabanli ignore dizin kontrolu."""
+    return dirname in IGNORED_DIRS or any(
+        fnmatch(dirname, pattern) for pattern in IGNORED_DIR_PATTERNS
+    )
+
+
+def _is_workspace_text_file(filename: str) -> bool:
+    """Workspace context'ine alinabilecek metin dosyasi mi?"""
+    ext = os.path.splitext(filename)[1].lower()
+    return ext in TEXT_EXTENSIONS or filename in SPECIAL_TEXT_FILES
+
+
+def _is_config_file(filename: str) -> bool:
+    """Config dosyalarini context'te one al."""
+    ext = os.path.splitext(filename)[1].lower()
+    return filename in CONFIG_FILENAMES or ext in CONFIG_EXTENSIONS
 
 
 def read_memory() -> str:
@@ -164,7 +235,7 @@ def read_workspace_files(workspace_dir: str = None) -> str:
     # Dosyaları topla
     all_files = []
     for root, dirs, files in os.walk(workspace_dir):
-        dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
+        dirs[:] = [d for d in dirs if not _should_ignore_dir(d)]
         dirs.sort()
 
         for filename in sorted(files):
@@ -173,8 +244,7 @@ def read_workspace_files(workspace_dir: str = None) -> str:
             if filename in ("memory.md", "todolist.md"):
                 continue
 
-            ext = os.path.splitext(filename)[1].lower()
-            if ext not in TEXT_EXTENSIONS:
+            if not _is_workspace_text_file(filename):
                 continue
 
             full_path = os.path.join(root, filename)
@@ -190,11 +260,7 @@ def read_workspace_files(workspace_dir: str = None) -> str:
 
                 if content.strip():
                     # Config dosyalarını önceliklendir
-                    is_config = filename in (
-                        "package.json", "tsconfig.json", "vite.config.ts",
-                        "tailwind.config.js", "webpack.config.js", "next.config.js",
-                        ".eslintrc.json", "pyproject.toml", "requirements.txt",
-                    )
+                    is_config = _is_config_file(filename)
                     all_files.append((rel_path, content, is_config))
             except (OSError, UnicodeDecodeError):
                 continue

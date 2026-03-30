@@ -1,6 +1,6 @@
 # Multi-Agent Pipeline — AI-Powered Project Builder
 
-`memory.md` ile proje bağlamını, `todolist.md` ile görev listesini vererek herhangi bir dilde proje üretebilmeyi hedefleyen multi-agent bir AI pipeline. Mevcut implementation Node.js ve Python akışlarında çalışıyor; C++, Go, Rust ve diğer diller için genelleme planı [`improvements.md`](./improvements.md) içinde izleniyor.
+`memory.md` ile proje bağlamını, `todolist.md` ile görev listesini vererek herhangi bir dilde proje üretebilmeyi hedefleyen multi-agent bir AI pipeline. Mevcut implementation artık Node.js, Python, C++, Go, Rust, Java ve .NET proje tiplerini algılayıp uygun install/build akışları seçebiliyor; yol haritasının kalan mantık iyileştirmeleri [`improvements.md`](./improvements.md) içinde izleniyor.
 
 ## Ne Yapar?
 
@@ -14,12 +14,13 @@
 
 | Dil / Platform | Bugünkü Durum | Not |
 |---|---|---|
-| Node.js / React / TypeScript | Hazır | `package.json` ve `npm run build` akışı aktif |
-| Python | Hazır | `requirements.txt` / `pyproject.toml` algısı aktif |
-| C++ | Yol haritasında | Dil-agnostik genişletme Faz 2'de |
-| Go | Yol haritasında | Dil-agnostik genişletme Faz 2'de |
-| Rust | Yol haritasında | Dil-agnostik genişletme Faz 2'de |
-| Java | Yol haritasında | Dil-agnostik genişletme Faz 2'de |
+| Node.js / React / TypeScript | Hazır | `package.json`, install, build ve dev command algısı aktif |
+| Python | Hazır | `requirements.txt`, `pyproject.toml`, `setup.py` algısı aktif |
+| C++ | Destekleniyor | `CMakeLists.txt` ve `Makefile` tabanlı algılama aktif |
+| Go | Destekleniyor | `go.mod` algısı ve build/install komutları aktif |
+| Rust | Destekleniyor | `Cargo.toml` algısı ve build/install komutları aktif |
+| Java / Kotlin | Destekleniyor | Maven ve Gradle marker'ları algılanıyor |
+| .NET | Destekleniyor | `*.csproj` / `*.sln` algısı ve build/install komutları aktif |
 
 Bu proje tasarım gereği herhangi bir dilde proje üretebilir hale gelmek üzere yapılandırılıyor. Örnek senaryolar:
 

@@ -39,6 +39,7 @@ from tools.file_tools import (
 )
 from tools.shell_tools import (
     auto_install_dependencies,
+    get_build_command,
     start_dev_server,
     stop_dev_server,
     detect_project_type,
@@ -200,17 +201,47 @@ def run_single_task(
             print("\n  ADIM 4/5: Test (devre dışı, atlanıyor)")
 
         # ─────────────────────────────────────
+        # DEPENDENCY KURULUMU (otomatik)
+        # ─────────────────────────────────────
+        if auto_install:
+            install_result = auto_install_dependencies()
+            if install_result:
+                log_data["install"] = {
+                    "success": install_result["success"],
+                    "stderr": install_result.get("stderr", "")[:500],
+                }
+                if not install_result["success"]:
+                    print("  UYARI: Dependency kurulumu başarısız!")
+
+        # ─────────────────────────────────────
         # BUILD TEST — Gerçek build kontrolü
         # ─────────────────────────────────────
-        if auto_install and detect_project_type() == "node":
-            print("\n  BUILD TEST: npm run build çalıştırılıyor...")
-            build_result = run_command("npm run build", timeout=120, silent=True)
+        project_type = detect_project_type()
+        build_cmd = get_build_command(project_type)
+        if build_cmd:
+            print(f"\n  BUILD TEST ({project_type}): {build_cmd}")
+            build_result = run_command(
+                build_cmd,
+                timeout=config.BUILD_TIMEOUT_SECONDS,
+                silent=True,
+            )
             if build_result["success"]:
                 print("  Build başarılı!")
-                log_data["build"] = "success"
+                log_data["build"] = {
+                    "project_type": project_type,
+                    "command": build_cmd,
+                    "success": True,
+                }
             else:
                 print("  BUILD UYARI: Build başarısız (log'a kaydedildi)")
-                log_data["build"] = build_result.get("stderr", "")[:2000]
+                log_data["build"] = {
+                    "project_type": project_type,
+                    "command": build_cmd,
+                    "success": False,
+                    "stderr": build_result.get("stderr", "")[:2000],
+                }
+        else:
+            print(f"\n  BUILD TEST: Atlandı ({project_type})")
 
         # ─────────────────────────────────────
         # ADIM 5: COMMITTER (opsiyonel)
@@ -229,19 +260,6 @@ def run_single_task(
             print(f"  Commit mesajı: {commit_msg[:80]}")
         else:
             print("\n  ADIM 5/5: Commit (devre dışı, atlanıyor)")
-
-        # ─────────────────────────────────────
-        # DEPENDENCY KURULUMU (otomatik)
-        # ─────────────────────────────────────
-        if auto_install:
-            install_result = auto_install_dependencies()
-            if install_result:
-                log_data["install"] = {
-                    "success": install_result["success"],
-                    "stderr": install_result.get("stderr", "")[:500],
-                }
-                if not install_result["success"]:
-                    print("  UYARI: Dependency kurulumu başarısız!")
 
         # Task'ı tamamla
         mark_task_done(task_text)
@@ -386,13 +404,9 @@ def main():
             server_result = start_dev_server()
             print(f"  {server_result['message']}")
             if server_result["success"]:
-                print("\n  Tarayıcıda aç:")
-                if project_type == "node":
-                    print("    http://localhost:5173  (Vite)")
-                    print("    http://localhost:3000  (Next.js / CRA)")
-                else:
-                    print("    http://localhost:5000  (Flask)")
-                    print("    http://localhost:8000  (Django)")
+                print("\n  Erişim için:")
+                print(f"    Komut: {server_result.get('command', 'bilinmiyor')}")
+                print("    Port ve URL uygulamanın kendi log çıktısından takip edilmeli.")
                 print("\n  Durdurmak için: Ctrl+C")
 
     print("=" * 60 + "\n")
