@@ -245,7 +245,9 @@ def save_code_files(coder_output: str, workspace_dir: str = None):
     current_content = []
     in_code_block = False
 
-    for line in coder_output.split("\n"):
+    lines = coder_output.split("\n")
+
+    for index, line in enumerate(lines):
         # Dosya başlığını yakala: ### `filepath`
         file_match = re.match(r"^###\s*`([^`]+)`", line)
         if file_match and not in_code_block:
@@ -263,6 +265,21 @@ def save_code_files(coder_output: str, workspace_dir: str = None):
 
         # Code block bitişi
         if line.strip() == "```" and in_code_block:
+            next_nonempty = ""
+            for future_line in lines[index + 1:]:
+                stripped = future_line.strip()
+                if stripped:
+                    next_nonempty = stripped
+                    break
+
+            # İçerikteki fenced markdown bloklarını koru; yalnızca
+            # yeni dosya/section başlangıcından önceki fence outer block'tur.
+            if next_nonempty and not (
+                next_nonempty.startswith("### `") or next_nonempty.startswith("## ")
+            ):
+                current_content.append(line)
+                continue
+
             in_code_block = False
             continue
 
