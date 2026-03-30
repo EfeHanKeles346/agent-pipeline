@@ -18,6 +18,8 @@ Kullanım:
 """
 
 import sys
+import os
+import re
 import json
 import time
 import argparse
@@ -26,7 +28,9 @@ from datetime import datetime
 import config
 from agents import PlannerAgent, CoderAgent, ReviewerAgent, TesterAgent, CommitterAgent
 from tools.file_tools import (
+    append_memory_entry,
     read_memory,
+    read_specific_files,
     read_workspace_files,
     get_pending_tasks,
     mark_task_done,
@@ -123,6 +127,8 @@ def run_single_task(
             "summary": saved_state.get("review_summary", "") if saved_state else "",
         }
         reviews = []
+        relevant_files = _extract_relevant_files_from_plan(plan or "")
+        coder_existing_files = existing_files
 
         # ─────────────────────────────────────
         # ADIM 1/6: PLANNER
@@ -134,7 +140,14 @@ def run_single_task(
             planner = PlannerAgent()
             plan = planner.plan(task=task_text, memory=memory, existing_files=existing_files)
             save_state(task_text, "coder", {"plan": plan})
+            relevant_files = _extract_relevant_files_from_plan(plan)
         log_data["plan"] = plan
+        if config.SEND_WORKSPACE_CONTEXT:
+            coder_existing_files = _build_coder_context(relevant_files, existing_files)
+            if relevant_files:
+                print(f"  Coder context daraltıldı: {len(relevant_files)} ilgili dosya")
+            else:
+                print("  Coder için tam workspace context kullanılacak")
 
         # ─────────────────────────────────────
         # ADIM 2-3/6: CODER + REVIEWER DÖNGÜSÜ
@@ -150,18 +163,19 @@ def run_single_task(
 
                 if config.SEND_WORKSPACE_CONTEXT and attempt > 1:
                     existing_files = read_workspace_files()
+                    coder_existing_files = _build_coder_context(relevant_files, existing_files)
 
                 if attempt == start_attempt and code:
                     print("  (state'den yüklendi)")
                 elif attempt == 1:
-                    code = coder.code(plan=plan, memory=memory, existing_files=existing_files)
+                    code = coder.code(plan=plan, memory=memory, existing_files=coder_existing_files)
                 else:
                     feedback_text = json.dumps(review_result, indent=2, ensure_ascii=False)
                     code = coder.fix(
                         previous_code=code,
                         feedback=feedback_text,
                         memory=memory,
-                        existing_files=existing_files,
+                        existing_files=coder_existing_files,
                     )
 
                 saved = save_code_files(code)
@@ -169,9 +183,11 @@ def run_single_task(
 
                 if config.SEND_WORKSPACE_CONTEXT:
                     existing_files = read_workspace_files()
+                    coder_existing_files = _build_coder_context(relevant_files, existing_files)
 
                 print(f"\n  ADIM 3/6: Code Review (tur {attempt})")
                 review_result = reviewer.review(code=code, plan=plan, existing_files=existing_files)
+                review_result = _normalize_review_result(review_result)
                 reviews.append(json.dumps(review_result, indent=2, ensure_ascii=False))
 
                 approved = review_result.get("approved", False)
@@ -265,11 +281,12 @@ def run_single_task(
                 feedback_text = json.dumps(build_feedback, indent=2, ensure_ascii=False)
                 if config.SEND_WORKSPACE_CONTEXT:
                     existing_files = read_workspace_files()
+                    coder_existing_files = _build_coder_context(relevant_files, existing_files)
                 code = coder.fix(
                     previous_code=code,
                     feedback=feedback_text,
                     memory=memory,
-                    existing_files=existing_files,
+                    existing_files=coder_existing_files,
                 )
                 saved = save_code_files(code)
                 save_state(
@@ -284,6 +301,7 @@ def run_single_task(
 
                 if config.SEND_WORKSPACE_CONTEXT:
                     existing_files = read_workspace_files()
+                    coder_existing_files = _build_coder_context(relevant_files, existing_files)
 
             log_data["build"] = build_log
             save_state(
@@ -345,25 +363,29 @@ def run_single_task(
         # FINALIZE: COMMITTER (opsiyonel)
         # ─────────────────────────────────────
         if config.ENABLE_COMMITTER:
-            print("\n  FINALIZE: Commit & Güncelleme")
+            print("\n  FINALIZE: Memory Güncelleme")
             committer = CommitterAgent()
-            commit_result = committer.commit(
+            changed_files = _relative_workspace_files(saved)
+            commit_result = committer.summarize(
                 task=task_text,
                 code=code,
                 review_summary=review_result.get("summary", ""),
+                files_changed=changed_files,
             )
             log_data["commit"] = json.dumps(commit_result, indent=2, ensure_ascii=False)
-
-            commit_msg = commit_result.get("commit_message", "")
-            print(f"  Commit mesajı: {commit_msg[:80]}")
+            memory_entry = commit_result.get("memory_entry", "").strip()
+            if memory_entry:
+                append_memory_entry(memory_entry, fallback_task=task_text)
+                print("  Memory AI özeti eklendi.")
+            else:
+                update_memory(task_text, saved)
+                print("  Memory için mekanik fallback kullanıldı.")
         else:
-            print("\n  FINALIZE: Commit (devre dışı, atlanıyor)")
+            print("\n  FINALIZE: Committer kapalı, mekanik memory güncellemesi kullanılacak")
+            update_memory(task_text, saved)
 
         # Task'ı tamamla
         mark_task_done(task_text)
-
-        # Memory'yi güncelle
-        update_memory(task_text, saved)
 
         # Log kaydet
         write_log(task_text, log_data)
@@ -397,6 +419,94 @@ def _build_failure_feedback(project_type: str, build_cmd: str, build_result: dic
             }
         ],
     }
+
+
+def _extract_relevant_files_from_plan(plan: str) -> list[str]:
+    """Planner ciktisindaki RELEVANT satirlarindan dosya yollarini ayikla."""
+    relevant_files = []
+    seen = set()
+    for line in plan.splitlines():
+        if "RELEVANT:" not in line:
+            continue
+        after = line.split("RELEVANT:", 1)[1].strip()
+        if not after:
+            continue
+        if after.startswith("`") and "`" in after[1:]:
+            candidate = after.split("`", 2)[1].strip()
+        else:
+            candidate = re.split(r"\s+[—-]\s+|\s+->\s+", after, maxsplit=1)[0].strip()
+        candidate = candidate.strip("`").strip()
+        if candidate and candidate not in seen:
+            relevant_files.append(candidate)
+            seen.add(candidate)
+    return relevant_files
+
+
+def _build_coder_context(relevant_files: list[str], fallback_context: str) -> str:
+    """Coder icin ilgili dosyalar varsa dar context, yoksa tum workspace context'i don."""
+    if not config.SEND_WORKSPACE_CONTEXT:
+        return ""
+    if not relevant_files:
+        return fallback_context
+    specific_context = read_specific_files(relevant_files)
+    return specific_context or fallback_context
+
+
+def _relative_workspace_files(saved_files: list[str]) -> list[str]:
+    """Kaydedilen dosyalari workspace'e gore relative yollara cevir."""
+    workspace = os.path.normpath(config.WORKSPACE_DIR)
+    relative_files = []
+    for file_path in saved_files:
+        normalized = os.path.normpath(file_path)
+        if normalized.startswith(workspace):
+            relative_files.append(os.path.relpath(normalized, workspace))
+        else:
+            relative_files.append(file_path)
+    return relative_files
+
+
+def _normalize_review_result(review_result: dict) -> dict:
+    """Reviewer sonucunu regression_check acisindan normalize et."""
+    normalized = dict(review_result)
+    issues = list(normalized.get("issues", []))
+    regression = normalized.get("regression_check")
+
+    if not isinstance(regression, dict):
+        print("  UYARI: Reviewer regression_check alanı göndermedi.")
+        regression = {
+            "checked": False,
+            "files_compared": [],
+            "regressions_found": [],
+        }
+    else:
+        regression.setdefault("checked", False)
+        regression.setdefault("files_compared", [])
+        regression.setdefault("regressions_found", [])
+
+    for regression_item in regression.get("regressions_found", []):
+        if isinstance(regression_item, dict):
+            file_path = regression_item.get("file", "unknown")
+            description = regression_item.get("description") or regression_item.get("issue") or str(regression_item)
+        else:
+            file_path = "unknown"
+            description = str(regression_item)
+
+        issue = {
+            "severity": "critical",
+            "file": file_path,
+            "description": description,
+            "fix": "Regresyona neden olan değişikliği düzelt.",
+        }
+        if issue not in issues:
+            issues.append(issue)
+
+    if regression.get("regressions_found"):
+        print(f"  UYARI: Reviewer {len(regression['regressions_found'])} regresyon bildirdi.")
+        normalized["approved"] = False
+
+    normalized["issues"] = issues
+    normalized["regression_check"] = regression
+    return normalized
 
 
 def main():

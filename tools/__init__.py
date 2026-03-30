@@ -1,11 +1,13 @@
 """Pipeline tools package export'ları."""
 
 from tools.file_tools import (
+    append_memory_entry,
     clear_state,
     get_pending_tasks,
     load_state,
     mark_task_done,
     read_memory,
+    read_specific_files,
     read_todolist,
     read_workspace_files,
     save_code_files,
@@ -26,6 +28,7 @@ from tools.shell_tools import (
 
 __all__ = [
     "auto_install_dependencies",
+    "append_memory_entry",
     "clear_state",
     "detect_project_type",
     "get_build_command",
@@ -35,6 +38,7 @@ __all__ = [
     "load_state",
     "mark_task_done",
     "read_memory",
+    "read_specific_files",
     "read_todolist",
     "read_workspace_files",
     "run_command",

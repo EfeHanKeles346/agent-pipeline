@@ -44,6 +44,16 @@ Yeni eklenen/değiştirilen bir dosyanın diğer dosyalara etkisini analiz et:
 - Hangi import'lar güncellenmeli?
 - API değişikliği var mı? (breaking change)
 
+## İlgili Dosyalar
+
+Coder'ın görmesi GEREKEN mevcut dosyaları ayrıca listele:
+- `RELEVANT: path/to/file.ext — neden gerekli`
+
+Kurallar:
+- Yalnızca bu task için gerçekten gerekli dosyaları yaz
+- Emin değilsen yazma; boş bırakmak tam workspace fallback'ine neden olur
+- Yeni oluşturulacak dosyaları değil, mevcut ve okunması faydalı dosyaları listele
+
 ## Mevcut Dosyalarla Çalışma
 
 Mesajda "Mevcut Workspace Dosyaları" bölümü varsa:
@@ -71,6 +81,10 @@ Her zaman şu formatta yanıt ver:
 ## Dosya Yapısı
 - `path/to/file.ext` — [YENİ / DÜZENLE / DOKUNMA] [açıklama]
 - `path/to/file2.ext` — [YENİ / DÜZENLE / DOKUNMA] [açıklama]
+
+## İlgili Dosyalar
+- `RELEVANT: path/to/file.ext — neden gerekli`
+- `RELEVANT: path/to/file2.ext — neden gerekli`
 
 ## Bağımlılıklar
 - [paket adı] — [ne için kullanılacak]

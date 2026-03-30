@@ -152,6 +152,31 @@ def test_read_workspace_files_ignores_language_build_dirs(tmp_path: Path):
     assert "src/main.rs" in result
 
 
+def test_read_specific_files_reads_only_requested_entries(tmp_path: Path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('main')\n", encoding="utf-8")
+    (tmp_path / "src" / "helper.py").write_text("print('helper')\n", encoding="utf-8")
+
+    result = file_tools.read_specific_files(["src/helper.py"], workspace_dir=str(tmp_path))
+
+    assert "src/helper.py" in result
+    assert "src/main.py" not in result
+
+
+def test_append_memory_entry_wraps_and_truncates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    memory_file = tmp_path / "memory.md"
+    memory_file.write_text("# Project Memory\n\n## Project Overview\n- Demo\n", encoding="utf-8")
+    monkeypatch.setattr(config, "MEMORY_FILE", str(memory_file))
+    monkeypatch.setattr(config, "MAX_MEMORY_LINES", 8)
+
+    file_tools.append_memory_entry("- Short AI summary", fallback_task="AI Task")
+
+    content = memory_file.read_text(encoding="utf-8")
+
+    assert "## Task Tamamlandı: AI Task" in content
+    assert "- Short AI summary" in content
+
+
 def test_read_todolist_parses_tasks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     todo = tmp_path / "todolist.md"
     todo.write_text("- [ ] First task\n- [x] Done task\n", encoding="utf-8")

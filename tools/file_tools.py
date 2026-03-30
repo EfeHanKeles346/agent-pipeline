@@ -300,6 +300,77 @@ def read_workspace_files(workspace_dir: str = None) -> str:
     return header + "\n\n".join(files_content)
 
 
+def read_specific_files(file_paths: list[str], workspace_dir: str = None) -> str:
+    """
+    Yalnızca belirtilen workspace dosyalarını oku ve formatlı context döndür.
+
+    Planner'ın belirlediği ilgili dosyaları Coder'a göndermek için kullanılır.
+    """
+    if workspace_dir is None:
+        workspace_dir = config.WORKSPACE_DIR
+
+    if not os.path.exists(workspace_dir):
+        return ""
+
+    max_file_size = config.MAX_FILE_SIZE
+    max_total = config.MAX_WORKSPACE_CONTEXT_CHARS
+
+    seen = set()
+    files_content = []
+    total_chars = 0
+    file_count = 0
+    missing = 0
+    skipped = 0
+
+    for raw_path in file_paths:
+        rel_path = raw_path.strip().strip("`")
+        if not rel_path or rel_path in seen:
+            continue
+        seen.add(rel_path)
+
+        full_path = os.path.normpath(os.path.join(workspace_dir, rel_path))
+        if not full_path.startswith(os.path.normpath(workspace_dir)):
+            continue
+        if not os.path.exists(full_path) or not os.path.isfile(full_path):
+            missing += 1
+            continue
+        if not _is_workspace_text_file(os.path.basename(full_path)):
+            continue
+
+        try:
+            size = os.path.getsize(full_path)
+            with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                if size > max_file_size:
+                    content = f.read(max_file_size) + "\n... (dosya kırpıldı)"
+                else:
+                    content = f.read()
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        if not content.strip():
+            continue
+
+        entry = f"### `{rel_path}`\n```\n{content}\n```"
+        if total_chars + len(entry) > max_total:
+            skipped += 1
+            continue
+
+        files_content.append(entry)
+        total_chars += len(entry)
+        file_count += 1
+
+    if not files_content:
+        return ""
+
+    header = f"## İlgili Workspace Dosyaları ({file_count} dosya"
+    if missing:
+        header += f", {missing} dosya bulunamadı"
+    if skipped:
+        header += f", {skipped} dosya context limiti nedeniyle atlandı"
+    header += ")\n\n"
+    return header + "\n\n".join(files_content)
+
+
 def save_code_files(coder_output: str, workspace_dir: str = None):
     """
     Coder agent'ın çıktısından dosyaları ayıkla ve diske kaydet.
@@ -453,6 +524,31 @@ def update_memory(task_text: str, files_created: list, files_modified: list = No
             f.write(updated_content)
     except OSError as e:
         print(f"  UYARI: Memory güncellenemedi: {e}")
+
+
+def append_memory_entry(memory_entry: str, fallback_task: str | None = None):
+    """AI tarafindan uretilen memory entry'yi truncate ederek memory.md'ye ekle."""
+    try:
+        try:
+            with open(config.MEMORY_FILE, "r", encoding="utf-8") as f:
+                existing_content = f.read()
+        except FileNotFoundError:
+            existing_content = ""
+
+        normalized_entry = memory_entry.strip()
+        if not normalized_entry:
+            return
+
+        if not normalized_entry.startswith("## Task Tamamlandı:"):
+            title = fallback_task or "Özet"
+            normalized_entry = f"## Task Tamamlandı: {title}\n{normalized_entry}"
+
+        updated_content = _truncate_memory_content(existing_content, f"\n{normalized_entry}\n")
+
+        with open(config.MEMORY_FILE, "w", encoding="utf-8") as f:
+            f.write(updated_content)
+    except OSError as e:
+        print(f"  UYARI: Memory entry eklenemedi: {e}")
 
 
 def _build_memory_block(task_text: str, files_created: list[str]) -> str:

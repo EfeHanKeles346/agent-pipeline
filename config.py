@@ -47,7 +47,7 @@ MAX_BUILD_RETRIES = 2
 
 # Tester ve Committer agent'larını aktif/pasif yap
 ENABLE_TESTER = True
-ENABLE_COMMITTER = False  # Git repo yokken gereksiz — repo oluşunca aktif et
+ENABLE_COMMITTER = True
 
 # Task'lar arası bekleme süresi (saniye) — rate limit koruması
 TASK_COOLDOWN_SECONDS = 5
