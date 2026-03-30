@@ -43,6 +43,7 @@ MODELS = {
 
 # Reviewer onaylamazsa kaç kere Coder'a geri dönülsün
 MAX_REVIEW_ATTEMPTS = 3
+MAX_BUILD_RETRIES = 2
 
 # Tester ve Committer agent'larını aktif/pasif yap
 ENABLE_TESTER = True
@@ -99,3 +100,4 @@ MAX_TOKENS = 16384  # Her agent'ın max output token'ı
 # ============================================
 MAX_WORKSPACE_CONTEXT_CHARS = 80000  # Workspace context toplam karakter limiti (~20K token)
 MAX_FILE_SIZE = 10000                # Dosya başına max karakter
+MAX_MEMORY_LINES = 100

@@ -185,7 +185,11 @@ def test_save_and_load_state_round_trip(tmp_path: Path, monkeypatch: pytest.Monk
     state_file = tmp_path / ".pipeline_state.json"
     monkeypatch.setattr(file_tools, "STATE_FILE", str(state_file))
 
-    file_tools.save_state("task one", "coder", {"plan": "plan", "code": "code", "attempt": 2})
+    file_tools.save_state(
+        "task one",
+        "coder",
+        {"plan": "plan", "code": "code", "attempt": 2, "review_summary": "ok"},
+    )
 
     loaded = file_tools.load_state("task one")
 
@@ -194,6 +198,7 @@ def test_save_and_load_state_round_trip(tmp_path: Path, monkeypatch: pytest.Monk
     assert loaded["plan"] == "plan"
     assert loaded["code"] == "code"
     assert loaded["attempt"] == 2
+    assert loaded["review_summary"] == "ok"
 
 
 def test_load_state_returns_none_for_different_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -214,3 +219,37 @@ def test_clear_state_removes_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     file_tools.clear_state()
 
     assert not state_file.exists()
+
+
+def test_update_memory_truncates_old_task_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    memory_file = tmp_path / "memory.md"
+    memory_file.write_text(
+        "# Project Memory\n\n"
+        "## Project Overview\n"
+        "- Name: Demo\n\n"
+        "## Task Tamamlandı: Old 1\n"
+        "- Tarih: 2026-03-31 00:01\n"
+        "- Dosyalar: a.py\n\n"
+        "## Task Tamamlandı: Old 2\n"
+        "- Tarih: 2026-03-31 00:02\n"
+        "- Dosyalar: b.py\n\n"
+        "## Task Tamamlandı: Old 3\n"
+        "- Tarih: 2026-03-31 00:03\n"
+        "- Dosyalar: c.py\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "MEMORY_FILE", str(memory_file))
+    monkeypatch.setattr(config, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "MAX_MEMORY_LINES", 12)
+
+    file_tools.update_memory("New Task", [str(tmp_path / "src" / "main.py")])
+
+    content = memory_file.read_text(encoding="utf-8")
+    lines = content.splitlines()
+
+    assert len(lines) <= 12
+    assert "# Project Memory" in content
+    assert "## Project Overview" in content
+    assert "## Task Tamamlandı: New Task" in content
+    assert "## Task Tamamlandı: Old 1" not in content
+    assert "Eski kayıtlar kırpıldı" in content

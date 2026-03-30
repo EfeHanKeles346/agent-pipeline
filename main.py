@@ -77,7 +77,7 @@ def run_single_task(
     """
     Tek bir task için tam pipeline döngüsünü çalıştır.
 
-    Akış: Planner → Coder ⇄ Reviewer → (Tester) → (Committer) → (Install)
+    Akış: Planner → Coder ⇄ Reviewer → Install → Build → Tester → Committer
     """
     task_text = task_info["task"]
 
@@ -90,12 +90,14 @@ def run_single_task(
         return True
 
     log_data = {}
+    saved = []
 
     try:
         # ─────────────────────────────────────
         # STATE RECOVERY — Yarıda kalan task'ı devam ettir
         # ─────────────────────────────────────
         saved_state = load_state(task_text)
+        resume_step = saved_state.get("step") if saved_state else "planner"
         if saved_state:
             print(f"  Kaldığı yerden devam ediliyor (adım: {saved_state['step']})")
 
@@ -112,82 +114,212 @@ def run_single_task(
             else:
                 print("  Workspace boş (ilk task)")
 
-        # ─────────────────────────────────────
-        # ADIM 1: PLANNER
-        # ─────────────────────────────────────
-        if saved_state and saved_state.get("plan"):
-            print("\n  ADIM 1/5: Planlama (state'den yüklendi)")
-            plan = saved_state["plan"]
-        else:
-            print("\n  ADIM 1/5: Planlama")
-            planner = PlannerAgent()
-            plan = planner.plan(task=task_text, memory=memory, existing_files=existing_files)
-        log_data["plan"] = plan
-        save_state(task_text, "planner", {"plan": plan})
-
-        # ─────────────────────────────────────
-        # ADIM 2-3: CODER + REVIEWER DÖNGÜSÜ
-        # ─────────────────────────────────────
         coder = CoderAgent()
         reviewer = ReviewerAgent()
 
+        plan = saved_state.get("plan") if saved_state else None
         code = saved_state.get("code") if saved_state else None
-        review_result = None
+        review_result = {
+            "summary": saved_state.get("review_summary", "") if saved_state else "",
+        }
         reviews = []
-        start_attempt = saved_state.get("attempt", 1) if saved_state and saved_state.get("code") else 1
 
-        for attempt in range(start_attempt, config.MAX_REVIEW_ATTEMPTS + 1):
-            print(f"\n  ADIM 2/5: Kodlama (deneme {attempt}/{config.MAX_REVIEW_ATTEMPTS})")
+        # ─────────────────────────────────────
+        # ADIM 1/6: PLANNER
+        # ─────────────────────────────────────
+        if resume_step in {"coder", "build", "tester", "committer"} and plan:
+            print("\n  ADIM 1/6: Planlama atlandı (state'den yüklendi)")
+        else:
+            print("\n  ADIM 1/6: Planlama")
+            planner = PlannerAgent()
+            plan = planner.plan(task=task_text, memory=memory, existing_files=existing_files)
+            save_state(task_text, "coder", {"plan": plan})
+        log_data["plan"] = plan
 
-            if config.SEND_WORKSPACE_CONTEXT and attempt > 1:
-                existing_files = read_workspace_files()
+        # ─────────────────────────────────────
+        # ADIM 2-3/6: CODER + REVIEWER DÖNGÜSÜ
+        # ─────────────────────────────────────
+        if resume_step in {"build", "tester", "committer"} and code:
+            print("\n  ADIM 2/6: Kodlama atlandı (state'den yüklendi)")
+            print("  ADIM 3/6: Code Review atlandı (state'den yüklendi)")
+        else:
+            start_attempt = saved_state.get("attempt", 1) if saved_state and saved_state.get("step") == "coder" and saved_state.get("code") else 1
 
-            if attempt == start_attempt and code:
-                print("  (state'den yüklendi)")
-            elif attempt == 1:
-                code = coder.code(plan=plan, memory=memory, existing_files=existing_files)
-            else:
-                feedback_text = json.dumps(review_result, indent=2, ensure_ascii=False)
+            for attempt in range(start_attempt, config.MAX_REVIEW_ATTEMPTS + 1):
+                print(f"\n  ADIM 2/6: Kodlama (deneme {attempt}/{config.MAX_REVIEW_ATTEMPTS})")
+
+                if config.SEND_WORKSPACE_CONTEXT and attempt > 1:
+                    existing_files = read_workspace_files()
+
+                if attempt == start_attempt and code:
+                    print("  (state'den yüklendi)")
+                elif attempt == 1:
+                    code = coder.code(plan=plan, memory=memory, existing_files=existing_files)
+                else:
+                    feedback_text = json.dumps(review_result, indent=2, ensure_ascii=False)
+                    code = coder.fix(
+                        previous_code=code,
+                        feedback=feedback_text,
+                        memory=memory,
+                        existing_files=existing_files,
+                    )
+
+                saved = save_code_files(code)
+                save_state(task_text, "coder", {"plan": plan, "code": code, "attempt": attempt})
+
+                if config.SEND_WORKSPACE_CONTEXT:
+                    existing_files = read_workspace_files()
+
+                print(f"\n  ADIM 3/6: Code Review (tur {attempt})")
+                review_result = reviewer.review(code=code, plan=plan, existing_files=existing_files)
+                reviews.append(json.dumps(review_result, indent=2, ensure_ascii=False))
+
+                approved = review_result.get("approved", False)
+                score = review_result.get("score", "?")
+                summary = review_result.get("summary", "")
+
+                print(f"  Review sonucu: {'ONAYLANDI' if approved else 'REDDEDİLDİ'} (skor: {score}/10)")
+                print(f"  Özet: {summary}")
+
+                if approved:
+                    print(f"\n  Kod {attempt}. denemede onaylandı!")
+                    break
+
+                if attempt == config.MAX_REVIEW_ATTEMPTS:
+                    print(f"\n  UYARI: {config.MAX_REVIEW_ATTEMPTS} denemede onaylanamadı!")
+                    print("  Son haliyle devam ediliyor...")
+
+            save_state(
+                task_text,
+                "build",
+                {
+                    "plan": plan,
+                    "code": code,
+                    "review_summary": review_result.get("summary", ""),
+                },
+            )
+
+        log_data["code"] = code
+        log_data["reviews"] = reviews
+
+        # ─────────────────────────────────────
+        # ADIM 4/6: DEPENDENCY KURULUMU (opsiyonel)
+        # ─────────────────────────────────────
+        if auto_install:
+            print("\n  ADIM 4/6: Dependency Kurulumu")
+            install_result = auto_install_dependencies()
+            if install_result:
+                log_data["install"] = {
+                    "success": install_result["success"],
+                    "stderr": install_result.get("stderr", "")[:500],
+                }
+                if not install_result["success"]:
+                    print("  UYARI: Dependency kurulumu başarısız!")
+        else:
+            print("\n  ADIM 4/6: Dependency Kurulumu (atlanıyor)")
+
+        # ─────────────────────────────────────
+        # ADIM 5/6: BUILD TEST — Gerçek build kontrolü
+        # ─────────────────────────────────────
+        project_type = detect_project_type()
+        build_cmd = get_build_command(project_type)
+        build_log = {
+            "project_type": project_type,
+            "command": build_cmd,
+            "attempts": [],
+        }
+
+        if resume_step in {"tester", "committer"} and code:
+            print("\n  ADIM 5/6: Build atlandı (state'den yüklendi)")
+        elif build_cmd:
+            total_build_attempts = config.MAX_BUILD_RETRIES + 1
+            for build_attempt in range(1, total_build_attempts + 1):
+                print(f"\n  ADIM 5/6: Build ({project_type}) deneme {build_attempt}/{total_build_attempts}")
+                build_result = run_command(
+                    build_cmd,
+                    timeout=config.BUILD_TIMEOUT_SECONDS,
+                    silent=True,
+                )
+                build_log["attempts"].append({
+                    "attempt": build_attempt,
+                    "success": build_result["success"],
+                    "stderr": build_result.get("stderr", "")[:2000],
+                })
+
+                if build_result["success"]:
+                    print("  Build başarılı!")
+                    build_log["success"] = True
+                    break
+
+                print("  BUILD UYARI: Build başarısız.")
+
+                if build_attempt == total_build_attempts:
+                    build_log["success"] = False
+                    break
+
+                build_feedback = _build_failure_feedback(
+                    project_type=project_type,
+                    build_cmd=build_cmd,
+                    build_result=build_result,
+                )
+                feedback_text = json.dumps(build_feedback, indent=2, ensure_ascii=False)
+                if config.SEND_WORKSPACE_CONTEXT:
+                    existing_files = read_workspace_files()
                 code = coder.fix(
                     previous_code=code,
                     feedback=feedback_text,
                     memory=memory,
                     existing_files=existing_files,
                 )
+                saved = save_code_files(code)
+                save_state(
+                    task_text,
+                    "build",
+                    {
+                        "plan": plan,
+                        "code": code,
+                        "review_summary": review_result.get("summary", ""),
+                    },
+                )
 
-            saved = save_code_files(code)
-            save_state(task_text, "coder", {"plan": plan, "code": code, "attempt": attempt})
+                if config.SEND_WORKSPACE_CONTEXT:
+                    existing_files = read_workspace_files()
 
-            if config.SEND_WORKSPACE_CONTEXT:
-                existing_files = read_workspace_files()
-
-            print(f"\n  ADIM 3/5: Code Review (tur {attempt})")
-            review_result = reviewer.review(code=code, plan=plan, existing_files=existing_files)
-            reviews.append(json.dumps(review_result, indent=2, ensure_ascii=False))
-
-            approved = review_result.get("approved", False)
-            score = review_result.get("score", "?")
-            summary = review_result.get("summary", "")
-
-            print(f"  Review sonucu: {'ONAYLANDI' if approved else 'REDDEDİLDİ'} (skor: {score}/10)")
-            print(f"  Özet: {summary}")
-
-            if approved:
-                print(f"\n  Kod {attempt}. denemede onaylandı!")
-                break
-
-            if attempt == config.MAX_REVIEW_ATTEMPTS:
-                print(f"\n  UYARI: {config.MAX_REVIEW_ATTEMPTS} denemede onaylanamadı!")
-                print("  Son haliyle devam ediliyor...")
-
-        log_data["code"] = code
-        log_data["reviews"] = reviews
+            log_data["build"] = build_log
+            save_state(
+                task_text,
+                "tester",
+                {
+                    "plan": plan,
+                    "code": code,
+                    "review_summary": review_result.get("summary", ""),
+                },
+            )
+        else:
+            print(f"\n  ADIM 5/6: Build atlandı ({project_type})")
+            log_data["build"] = {
+                "project_type": project_type,
+                "command": None,
+                "success": None,
+                "attempts": [],
+            }
+            save_state(
+                task_text,
+                "tester",
+                {
+                    "plan": plan,
+                    "code": code,
+                    "review_summary": review_result.get("summary", ""),
+                },
+            )
 
         # ─────────────────────────────────────
-        # ADIM 4: TESTER (opsiyonel)
+        # ADIM 6/6: TESTER (opsiyonel)
         # ─────────────────────────────────────
-        if config.ENABLE_TESTER:
-            print("\n  ADIM 4/5: Test")
+        if resume_step == "committer":
+            print("\n  ADIM 6/6: Test atlandı (state'den yüklendi)")
+        elif config.ENABLE_TESTER:
+            print("\n  ADIM 6/6: Test")
             tester = TesterAgent()
             test_result = tester.test(code=code, existing_files=existing_files)
             log_data["test"] = json.dumps(test_result, indent=2, ensure_ascii=False)
@@ -197,57 +329,23 @@ def run_single_task(
 
             if not passed:
                 print("  UYARI: Test başarısız. Log'a kaydedildi.")
-        else:
-            print("\n  ADIM 4/5: Test (devre dışı, atlanıyor)")
-
-        # ─────────────────────────────────────
-        # DEPENDENCY KURULUMU (otomatik)
-        # ─────────────────────────────────────
-        if auto_install:
-            install_result = auto_install_dependencies()
-            if install_result:
-                log_data["install"] = {
-                    "success": install_result["success"],
-                    "stderr": install_result.get("stderr", "")[:500],
-                }
-                if not install_result["success"]:
-                    print("  UYARI: Dependency kurulumu başarısız!")
-
-        # ─────────────────────────────────────
-        # BUILD TEST — Gerçek build kontrolü
-        # ─────────────────────────────────────
-        project_type = detect_project_type()
-        build_cmd = get_build_command(project_type)
-        if build_cmd:
-            print(f"\n  BUILD TEST ({project_type}): {build_cmd}")
-            build_result = run_command(
-                build_cmd,
-                timeout=config.BUILD_TIMEOUT_SECONDS,
-                silent=True,
+            save_state(
+                task_text,
+                "committer",
+                {
+                    "plan": plan,
+                    "code": code,
+                    "review_summary": review_result.get("summary", ""),
+                },
             )
-            if build_result["success"]:
-                print("  Build başarılı!")
-                log_data["build"] = {
-                    "project_type": project_type,
-                    "command": build_cmd,
-                    "success": True,
-                }
-            else:
-                print("  BUILD UYARI: Build başarısız (log'a kaydedildi)")
-                log_data["build"] = {
-                    "project_type": project_type,
-                    "command": build_cmd,
-                    "success": False,
-                    "stderr": build_result.get("stderr", "")[:2000],
-                }
         else:
-            print(f"\n  BUILD TEST: Atlandı ({project_type})")
+            print("\n  ADIM 6/6: Test (devre dışı, atlanıyor)")
 
         # ─────────────────────────────────────
-        # ADIM 5: COMMITTER (opsiyonel)
+        # FINALIZE: COMMITTER (opsiyonel)
         # ─────────────────────────────────────
         if config.ENABLE_COMMITTER:
-            print("\n  ADIM 5/5: Commit & Güncelleme")
+            print("\n  FINALIZE: Commit & Güncelleme")
             committer = CommitterAgent()
             commit_result = committer.commit(
                 task=task_text,
@@ -259,7 +357,7 @@ def run_single_task(
             commit_msg = commit_result.get("commit_message", "")
             print(f"  Commit mesajı: {commit_msg[:80]}")
         else:
-            print("\n  ADIM 5/5: Commit (devre dışı, atlanıyor)")
+            print("\n  FINALIZE: Commit (devre dışı, atlanıyor)")
 
         # Task'ı tamamla
         mark_task_done(task_text)
@@ -281,6 +379,24 @@ def run_single_task(
         log_data["error"] = str(e)
         write_log(task_text, log_data)
         return False
+
+
+def _build_failure_feedback(project_type: str, build_cmd: str, build_result: dict) -> dict:
+    """Build hatasini coder fix loop'u icin reviewer-benzeri feedback'e cevir."""
+    stderr = (build_result.get("stderr") or build_result.get("stdout") or "").strip()
+    return {
+        "approved": False,
+        "score": 2,
+        "summary": f"Build hatası: {project_type}",
+        "issues": [
+            {
+                "severity": "critical",
+                "file": build_cmd or "build output",
+                "description": stderr[:2000] or "Build başarısız oldu, ancak hata çıktısı boş.",
+                "fix": "Build hatasını düzelt ve kodu tekrar üret.",
+            }
+        ],
+    }
 
 
 def main():

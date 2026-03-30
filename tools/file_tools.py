@@ -49,6 +49,8 @@ SPECIAL_TEXT_FILES = {
     "go.sum",
 }
 
+TRUNCATION_NOTE = "(Eski kayıtlar kırpıldı — detaylar logs/ altında)\n\n"
+
 CONFIG_FILENAMES = {
     "package.json",
     "tsconfig.json",
@@ -198,6 +200,12 @@ def write_log(task: str, log_data: dict):
 
         if "test" in log_data:
             f.write(f"## Tester Çıktısı\n\n```json\n{log_data['test']}\n```\n\n")
+
+        if "install" in log_data:
+            f.write(f"## Install\n\n```json\n{json.dumps(log_data['install'], indent=2, ensure_ascii=False)}\n```\n\n")
+
+        if "build" in log_data:
+            f.write(f"## Build\n\n```json\n{json.dumps(log_data['build'], indent=2, ensure_ascii=False)}\n```\n\n")
 
         if "commit" in log_data:
             f.write(f"## Commit Bilgisi\n\n```json\n{log_data['commit']}\n```\n\n")
@@ -398,6 +406,7 @@ def save_state(task_text: str, step: str, data: dict):
         "attempt": data.get("attempt", 1),
         "plan": data.get("plan"),
         "code": data.get("code"),
+        "review_summary": data.get("review_summary", ""),
         "timestamp": datetime.now().isoformat(),
     }
     with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -431,19 +440,78 @@ def clear_state():
 def update_memory(task_text: str, files_created: list, files_modified: list = None):
     """Her task tamamlandığında memory.md'ye otomatik bilgi ekle."""
     try:
-        with open(config.MEMORY_FILE, "a", encoding="utf-8") as f:
-            f.write(f"\n## Task Tamamlandı: {task_text}\n")
-            f.write(f"- Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
-            if files_created:
-                # Workspace dir prefix'ini kaldır
-                workspace = os.path.normpath(config.WORKSPACE_DIR)
-                rel_files = []
-                for fp in files_created:
-                    fp_norm = os.path.normpath(fp)
-                    if fp_norm.startswith(workspace):
-                        rel_files.append(os.path.relpath(fp_norm, workspace))
-                    else:
-                        rel_files.append(fp)
-                f.write(f"- Dosyalar: {', '.join(rel_files)}\n")
+        try:
+            with open(config.MEMORY_FILE, "r", encoding="utf-8") as f:
+                existing_content = f.read()
+        except FileNotFoundError:
+            existing_content = ""
+
+        new_block = _build_memory_block(task_text, files_created or [])
+        updated_content = _truncate_memory_content(existing_content, new_block)
+
+        with open(config.MEMORY_FILE, "w", encoding="utf-8") as f:
+            f.write(updated_content)
     except OSError as e:
         print(f"  UYARI: Memory güncellenemedi: {e}")
+
+
+def _build_memory_block(task_text: str, files_created: list[str]) -> str:
+    """Tek task icin memory blok metnini uret."""
+    block = f"\n## Task Tamamlandı: {task_text}\n"
+    block += f"- Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+
+    if files_created:
+        workspace = os.path.normpath(config.WORKSPACE_DIR)
+        rel_files = []
+        for fp in files_created:
+            fp_norm = os.path.normpath(fp)
+            if fp_norm.startswith(workspace):
+                rel_files.append(os.path.relpath(fp_norm, workspace))
+            else:
+                rel_files.append(fp)
+        block += f"- Dosyalar: {', '.join(rel_files)}\n"
+
+    return block
+
+
+def _truncate_memory_content(existing_content: str, new_block: str) -> str:
+    """Memory icerigini proje tanimini koruyarak truncate et."""
+    max_lines = getattr(config, "MAX_MEMORY_LINES", 100)
+    existing_content = existing_content.replace(TRUNCATION_NOTE, "")
+
+    block_pattern = r"(?=^## Task Tamamlandı: )"
+    parts = re.split(block_pattern, existing_content, flags=re.MULTILINE)
+
+    header = parts[0] if parts else ""
+    blocks = [part for part in parts[1:] if part.strip()]
+    blocks.append(new_block.lstrip("\n"))
+
+    truncated = False
+    assembled = _assemble_memory_content(header, blocks, truncated=False)
+
+    while len(assembled.splitlines()) > max_lines and blocks:
+        blocks.pop(0)
+        truncated = True
+        assembled = _assemble_memory_content(header, blocks, truncated=truncated)
+
+    return assembled
+
+
+def _assemble_memory_content(header: str, blocks: list[str], truncated: bool) -> str:
+    """Header, truncation note ve task bloklarini birlestir."""
+    content = header
+    if content and not content.endswith("\n"):
+        content += "\n"
+
+    if truncated:
+        if content and not content.endswith("\n\n"):
+            content += "\n"
+        content += TRUNCATION_NOTE
+
+    if blocks:
+        if content and not content.endswith("\n"):
+            content += "\n"
+        content += "\n".join(block.rstrip("\n") for block in blocks).strip("\n")
+        content += "\n"
+
+    return content
