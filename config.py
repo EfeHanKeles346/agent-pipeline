@@ -37,6 +37,13 @@ MODELS = {
     "committer": "claude-haiku-4-20250514",     # Mesaj üretimi — Haiku yeterli
 }
 
+# Yaklaşık fiyatlar (USD / 1M token)
+# Faz 5 raporlama için kullanılır; yeni model ailesi eklenirse burayı genişlet.
+MODEL_PRICING_USD_PER_MILLION = {
+    "sonnet": {"input": 3.0, "output": 15.0},
+    "haiku": {"input": 0.25, "output": 1.25},
+}
+
 # ============================================
 # PIPELINE AYARLARI
 # ============================================

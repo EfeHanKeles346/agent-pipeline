@@ -70,6 +70,162 @@ def print_task_list(tasks: list[dict]):
     print()
 
 
+def _empty_model_usage() -> dict:
+    """Tek model için boş kullanım özeti."""
+    return {
+        "input": 0,
+        "output": 0,
+        "api_calls": 0,
+        "total": 0,
+        "cost_usd": 0.0,
+    }
+
+
+def _empty_token_usage() -> dict:
+    """Task veya pipeline için boş token özeti."""
+    return {
+        "input": 0,
+        "output": 0,
+        "api_calls": 0,
+        "total": 0,
+        "cost_usd": 0.0,
+        "models": {},
+    }
+
+
+def _estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Model ailesine göre yaklaşık maliyeti hesapla."""
+    lowered_model = (model or "").lower()
+    pricing = {"input": 0.0, "output": 0.0}
+
+    for model_family, rates in config.MODEL_PRICING_USD_PER_MILLION.items():
+        if model_family in lowered_model:
+            pricing = rates
+            break
+
+    input_cost = (input_tokens / 1_000_000) * pricing["input"]
+    output_cost = (output_tokens / 1_000_000) * pricing["output"]
+    return input_cost + output_cost
+
+
+def _merge_token_usage(target: dict, addition: dict) -> dict:
+    """Bir kullanım özetini diğerine ekle."""
+    target["input"] += int(addition.get("input", 0) or 0)
+    target["output"] += int(addition.get("output", 0) or 0)
+    target["api_calls"] += int(addition.get("api_calls", 0) or 0)
+    target["cost_usd"] += float(addition.get("cost_usd", 0.0) or 0.0)
+    target["total"] = target["input"] + target["output"]
+
+    for model, usage in addition.get("models", {}).items():
+        model_usage = target["models"].setdefault(model, _empty_model_usage())
+        model_usage["input"] += int(usage.get("input", 0) or 0)
+        model_usage["output"] += int(usage.get("output", 0) or 0)
+        model_usage["api_calls"] += int(usage.get("api_calls", 0) or 0)
+        model_usage["cost_usd"] += float(usage.get("cost_usd", 0.0) or 0.0)
+        model_usage["total"] = model_usage["input"] + model_usage["output"]
+
+    return target
+
+
+def _finalize_token_usage(token_usage: dict) -> dict:
+    """Kullanım özetini JSON ve rapor çıktısı için normalize et."""
+    finalized = {
+        "input": int(token_usage.get("input", 0) or 0),
+        "output": int(token_usage.get("output", 0) or 0),
+        "api_calls": int(token_usage.get("api_calls", 0) or 0),
+        "total": int(token_usage.get("total", 0) or 0),
+        "cost_usd": round(float(token_usage.get("cost_usd", 0.0) or 0.0), 6),
+        "models": {},
+    }
+
+    for model, usage in token_usage.get("models", {}).items():
+        finalized["models"][model] = {
+            "input": int(usage.get("input", 0) or 0),
+            "output": int(usage.get("output", 0) or 0),
+            "api_calls": int(usage.get("api_calls", 0) or 0),
+            "total": int(usage.get("total", 0) or 0),
+            "cost_usd": round(float(usage.get("cost_usd", 0.0) or 0.0), 6),
+        }
+
+    finalized["total"] = finalized["input"] + finalized["output"]
+    return finalized
+
+
+def _agent_usage_snapshot(agent: object) -> dict:
+    """Agent instance'ından mevcut birikimli sayaçları al."""
+    return {
+        "input": int(getattr(agent, "total_input_tokens", 0) or 0),
+        "output": int(getattr(agent, "total_output_tokens", 0) or 0),
+        "api_calls": int(getattr(agent, "total_api_calls", 0) or 0),
+    }
+
+
+def _record_agent_usage(task_tokens: dict, agent_snapshots: dict, agent: object, agent_name: str):
+    """Agent'ın son çağrıdaki kullanım farkını task toplamına ekle."""
+    current = _agent_usage_snapshot(agent)
+    agent_id = id(agent)
+    previous = agent_snapshots.get(agent_id, {"input": 0, "output": 0, "api_calls": 0})
+    agent_snapshots[agent_id] = current
+
+    delta_input = max(0, current["input"] - previous["input"])
+    delta_output = max(0, current["output"] - previous["output"])
+    delta_calls = max(0, current["api_calls"] - previous["api_calls"])
+
+    if delta_input == 0 and delta_output == 0 and delta_calls == 0:
+        return
+
+    model = getattr(agent, "model", config.MODELS.get(agent_name, "unknown"))
+    delta_cost = _estimate_cost_usd(model, delta_input, delta_output)
+    delta_usage = {
+        "input": delta_input,
+        "output": delta_output,
+        "api_calls": delta_calls,
+        "total": delta_input + delta_output,
+        "cost_usd": delta_cost,
+        "models": {
+            model: {
+                "input": delta_input,
+                "output": delta_output,
+                "api_calls": delta_calls,
+                "total": delta_input + delta_output,
+                "cost_usd": delta_cost,
+            }
+        },
+    }
+    _merge_token_usage(task_tokens, delta_usage)
+
+
+def _build_task_result(success: bool, task_tokens: dict, log_file: str | None = None) -> dict:
+    """run_single_task() için standart dönüş objesi oluştur."""
+    result = {
+        "success": success,
+        "tokens": _finalize_token_usage(task_tokens),
+    }
+    if log_file:
+        result["log_file"] = log_file
+    return result
+
+
+def _write_pipeline_report(report: dict) -> str:
+    """Pipeline özetini JSON olarak logs/ altına kaydet."""
+    os.makedirs(config.LOGS_DIR, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    report_file = os.path.join(config.LOGS_DIR, f"pipeline_report_{timestamp}.json")
+    suffix = 1
+    while os.path.exists(report_file):
+        report_file = os.path.join(
+            config.LOGS_DIR,
+            f"pipeline_report_{timestamp}_{suffix:02d}.json",
+        )
+        suffix += 1
+
+    with open(report_file, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
+
+    return report_file
+
+
 def run_single_task(
     task_info: dict,
     task_number: int,
@@ -91,10 +247,12 @@ def run_single_task(
 
     if dry_run:
         print("  [DRY RUN] Agent çağrıları atlanıyor.")
-        return True
+        return _build_task_result(True, _empty_token_usage())
 
     log_data = {}
     saved = []
+    task_tokens = _empty_token_usage()
+    agent_snapshots = {}
 
     try:
         # ─────────────────────────────────────
@@ -139,6 +297,7 @@ def run_single_task(
             print("\n  ADIM 1/6: Planlama")
             planner = PlannerAgent()
             plan = planner.plan(task=task_text, memory=memory, existing_files=existing_files)
+            _record_agent_usage(task_tokens, agent_snapshots, planner, "planner")
             save_state(task_text, "coder", {"plan": plan})
             relevant_files = _extract_relevant_files_from_plan(plan)
         log_data["plan"] = plan
@@ -169,6 +328,7 @@ def run_single_task(
                     print("  (state'den yüklendi)")
                 elif attempt == 1:
                     code = coder.code(plan=plan, memory=memory, existing_files=coder_existing_files)
+                    _record_agent_usage(task_tokens, agent_snapshots, coder, "coder")
                 else:
                     feedback_text = json.dumps(review_result, indent=2, ensure_ascii=False)
                     code = coder.fix(
@@ -177,6 +337,7 @@ def run_single_task(
                         memory=memory,
                         existing_files=coder_existing_files,
                     )
+                    _record_agent_usage(task_tokens, agent_snapshots, coder, "coder")
 
                 saved = save_code_files(code)
                 save_state(task_text, "coder", {"plan": plan, "code": code, "attempt": attempt})
@@ -187,6 +348,7 @@ def run_single_task(
 
                 print(f"\n  ADIM 3/6: Code Review (tur {attempt})")
                 review_result = reviewer.review(code=code, plan=plan, existing_files=existing_files)
+                _record_agent_usage(task_tokens, agent_snapshots, reviewer, "reviewer")
                 review_result = _normalize_review_result(review_result)
                 reviews.append(json.dumps(review_result, indent=2, ensure_ascii=False))
 
@@ -288,6 +450,7 @@ def run_single_task(
                     memory=memory,
                     existing_files=coder_existing_files,
                 )
+                _record_agent_usage(task_tokens, agent_snapshots, coder, "coder")
                 saved = save_code_files(code)
                 save_state(
                     task_text,
@@ -340,6 +503,7 @@ def run_single_task(
             print("\n  ADIM 6/6: Test")
             tester = TesterAgent()
             test_result = tester.test(code=code, existing_files=existing_files)
+            _record_agent_usage(task_tokens, agent_snapshots, tester, "tester")
             log_data["test"] = json.dumps(test_result, indent=2, ensure_ascii=False)
 
             passed = test_result.get("passed", True)
@@ -372,6 +536,7 @@ def run_single_task(
                 review_summary=review_result.get("summary", ""),
                 files_changed=changed_files,
             )
+            _record_agent_usage(task_tokens, agent_snapshots, committer, "committer")
             log_data["commit"] = json.dumps(commit_result, indent=2, ensure_ascii=False)
             memory_entry = commit_result.get("memory_entry", "").strip()
             if memory_entry:
@@ -388,19 +553,19 @@ def run_single_task(
         mark_task_done(task_text)
 
         # Log kaydet
-        write_log(task_text, log_data)
+        log_file = write_log(task_text, log_data)
 
         # State temizle
         clear_state()
 
         print(f"\n  TASK TAMAMLANDI: {task_text}")
-        return True
+        return _build_task_result(True, task_tokens, log_file)
 
     except Exception as e:
         print(f"\n  HATA: {e}")
         log_data["error"] = str(e)
-        write_log(task_text, log_data)
-        return False
+        log_file = write_log(task_text, log_data)
+        return _build_task_result(False, task_tokens, log_file)
 
 
 def _build_failure_feedback(project_type: str, build_cmd: str, build_result: dict) -> dict:
@@ -587,13 +752,14 @@ def main():
 
     # Pipeline'ı çalıştır
     results = []
+    pipeline_tokens = _empty_token_usage()
     for i, task_info in enumerate(tasks_to_run, 1):
         if i > 1:
             cooldown = config.TASK_COOLDOWN_SECONDS
             print(f"\n  {cooldown}s bekleniyor (rate limit koruması)...")
             time.sleep(cooldown)
 
-        success = run_single_task(
+        task_result = run_single_task(
             task_info=task_info,
             task_number=i,
             total_tasks=len(tasks_to_run),
@@ -601,7 +767,9 @@ def main():
             dry_run=args.dry_run,
             auto_install=do_install,
         )
-        results.append({"task": task_info["task"], "success": success})
+        task_result["task"] = task_info["task"]
+        results.append(task_result)
+        _merge_token_usage(pipeline_tokens, task_result.get("tokens", {}))
 
     # Sonuç özeti
     print("\n" + "=" * 60)
@@ -615,8 +783,39 @@ def main():
         icon = "[OK]" if r["success"] else "[XX]"
         print(f"  {icon} {r['task']}")
 
+    pipeline_summary = _finalize_token_usage(pipeline_tokens)
     print(f"\n  Toplam: {success_count} başarılı, {fail_count} başarısız")
+    print(f"  API Çağrıları: {pipeline_summary['api_calls']}")
+    print(
+        "  Token: "
+        f"{pipeline_summary['input']:,} input + "
+        f"{pipeline_summary['output']:,} output = "
+        f"{pipeline_summary['total']:,} toplam"
+    )
+    print(f"  Tahmini Maliyet: ~${pipeline_summary['cost_usd']:.2f}")
     print(f"  Log'lar: {config.LOGS_DIR}/")
+
+    report = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "workspace": config.WORKSPACE_DIR,
+        "tasks": [
+            {
+                "name": r["task"],
+                "success": r["success"],
+                "tokens": r.get("tokens", _finalize_token_usage(_empty_token_usage())),
+                "log_file": r.get("log_file"),
+            }
+            for r in results
+        ],
+        "totals": {
+            "success": success_count,
+            "failed": fail_count,
+            "tokens": pipeline_summary,
+            "cost_usd": pipeline_summary["cost_usd"],
+        },
+    }
+    report_file = _write_pipeline_report(report)
+    print(f"  Pipeline raporu: {report_file}")
 
     # ─────────────────────────────────────
     # DEV SERVER BAŞLAT

@@ -24,6 +24,7 @@ class BaseAgent:
         # Token tracking
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+        self.total_api_calls = 0
 
     def _load_prompt(self) -> str:
         """prompts/ klasöründen system prompt'u oku."""
@@ -74,6 +75,7 @@ class BaseAgent:
                 output_tokens = response.usage.output_tokens
                 self.total_input_tokens += input_tokens
                 self.total_output_tokens += output_tokens
+                self.total_api_calls += 1
                 print(f"  Tokens: {input_tokens} input + {output_tokens} output")
                 print(f"  {self.name.upper()} tamamlandı.")
 
