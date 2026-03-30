@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Pipeline
+logs/
+.pipeline_state.json
+
+# Workspace
+workspace/node_modules/
+workspace/dist/
+workspace/build/
+workspace/.env
+
+# IDE
+.DS_Store
+.vscode/
+.idea/
+.claude/settings.local.json
+*.swp
+*.swo
+
+# OS
+Thumbs.db
