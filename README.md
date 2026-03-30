@@ -91,7 +91,7 @@ python3 main.py --reset     # Faz 6
 
 ## Yeni Proje Başlatma Rehberi
 
-1. `workspace/` içindeki mevcut hedef projeyi temizleyin veya değiştirin.
+1. Repo varsayılan olarak temiz `workspace/` şablonlarıyla gelir.
 2. `workspace/memory.md` içine proje tanımını yazın.
 3. `workspace/todolist.md` içine yapılacak işleri `- [ ] ...` formatında ekleyin.
 4. `python3 main.py --list` ile görevleri kontrol edin.
@@ -174,5 +174,6 @@ Test kapsamı şu an kritik parser ve tool fonksiyonlarına odaklanır:
 
 - `logs/` klasörü task geçmişini tutar
 - `.pipeline_state.json` yarım kalan task'ı toparlamak için kullanılır
-- `workspace/node_modules` ve `workspace/dist` git'e dahil edilmez
+- Repo yalnızca `workspace/memory.md` ve `workspace/todolist.md` şablonlarını taşır
+- Pipeline'ın `workspace/` içine ürettiği proje dosyaları varsayılan olarak git'e dahil edilmez
 - Yol haritası ve kabul kriterleri için [`improvements.md`](./improvements.md) dosyasına bakın

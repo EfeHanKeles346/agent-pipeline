@@ -9,11 +9,10 @@ __pycache__/
 logs/
 .pipeline_state.json
 
-# Workspace
-workspace/node_modules/
-workspace/dist/
-workspace/build/
-workspace/.env
+# Workspace generated outputs
+workspace/*
+!workspace/memory.md
+!workspace/todolist.md
 
 # IDE
 .DS_Store
