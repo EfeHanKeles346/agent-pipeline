@@ -22,6 +22,7 @@ import os
 import re
 import json
 import time
+import shutil
 import argparse
 from datetime import datetime
 
@@ -30,9 +31,9 @@ from agents import PlannerAgent, CoderAgent, ReviewerAgent, TesterAgent, Committ
 from tools.file_tools import (
     append_memory_entry,
     read_memory,
+    read_todolist,
     read_specific_files,
     read_workspace_files,
-    get_pending_tasks,
     mark_task_done,
     write_log,
     save_code_files,
@@ -68,6 +69,109 @@ def print_task_list(tasks: list[dict]):
         icon = "  [x]" if t["done"] else "  [ ]"
         print(f"  {icon} {i}. {t['task']}")
     print()
+
+
+def _default_memory_template() -> str:
+    """Yeni workspace için başlangıç memory şablonu."""
+    return (
+        "# memory.md\n"
+        "## Proje Tanımı\n"
+        "[Proje açıklamanı buraya yaz]\n\n"
+        "## Teknoloji Seçimleri\n"
+        "[Kullanılacak dil, framework, araçlar]\n"
+    )
+
+
+def _default_todolist_template() -> str:
+    """Yeni workspace için başlangıç todolist şablonu."""
+    return (
+        "# todolist.md\n"
+        "- [ ] İlk taskını buraya yaz\n"
+    )
+
+
+def _write_text_file(path: str, content: str):
+    """UTF-8 metin dosyası yaz."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def reset_workspace(full: bool = False, confirm: bool = True) -> bool:
+    """workspace/ içeriğini temizle ve gerekirse şablon dosyaları yeniden oluştur."""
+    if confirm:
+        answer = input("Workspace silinecek. Emin misiniz? (y/n): ").strip().lower()
+        if answer not in {"y", "yes", "e", "evet"}:
+            print("  İşlem iptal edildi.")
+            return False
+
+    os.makedirs(config.WORKSPACE_DIR, exist_ok=True)
+    protected_files = set() if full else {"memory.md", "todolist.md"}
+
+    for entry in os.listdir(config.WORKSPACE_DIR):
+        if entry in protected_files:
+            continue
+
+        full_path = os.path.join(config.WORKSPACE_DIR, entry)
+        if os.path.isdir(full_path):
+            shutil.rmtree(full_path)
+        else:
+            os.remove(full_path)
+
+    if full or not os.path.exists(config.MEMORY_FILE):
+        _write_text_file(config.MEMORY_FILE, _default_memory_template())
+    if full or not os.path.exists(config.TODOLIST_FILE):
+        _write_text_file(config.TODOLIST_FILE, _default_todolist_template())
+
+    clear_state()
+    mode = "full" if full else "korumalı"
+    print(f"  Workspace sıfırlandı ({mode} mod).")
+    return True
+
+
+def validate_workspace() -> dict:
+    """Pipeline başlamadan önce workspace dosyalarını doğrula."""
+    if not os.path.isdir(config.WORKSPACE_DIR):
+        raise FileNotFoundError(
+            f"\n workspace bulunamadı: {config.WORKSPACE_DIR}\n"
+            " workspace/ klasörünü oluştur veya --reset ile yeniden hazırla.\n"
+        )
+
+    if not os.path.exists(config.MEMORY_FILE):
+        _write_text_file(config.MEMORY_FILE, _default_memory_template())
+        print("  UYARI: memory.md bulunamadı. Boş şablon oluşturuldu.")
+
+    all_tasks = read_todolist()
+    pending_tasks = [task for task in all_tasks if not task["done"]]
+
+    if not pending_tasks:
+        raise ValueError(
+            "\n Çalıştırılacak pending task bulunamadı.\n"
+            " workspace/todolist.md içine en az 1 adet `- [ ]` görev ekle.\n"
+        )
+
+    return {
+        "all_tasks": all_tasks,
+        "pending": pending_tasks,
+    }
+
+
+def _print_verbose_status(args):
+    """CLI seviyesinde verbose mod özetini yazdır."""
+    if not config.VERBOSE:
+        return
+
+    print("\n  [VERBOSE] Detaylı log modu aktif")
+    print(
+        "  [VERBOSE] Argümanlar: "
+        f"task={args.task}, "
+        f"list={args.list}, "
+        f"dry_run={args.dry_run}, "
+        f"no_install={args.no_install}, "
+        f"no_server={args.no_server}, "
+        f"reset={args.reset}, "
+        f"full={args.full}"
+    )
 
 
 def _empty_model_usage() -> dict:
@@ -680,14 +784,29 @@ def main():
     parser.add_argument("--task", type=int, help="Sadece N. pending task'ı çalıştır")
     parser.add_argument("--list", action="store_true", help="Task listesini göster")
     parser.add_argument("--dry-run", action="store_true", help="Agent çağırmadan test et")
+    parser.add_argument("--verbose", action="store_true", default=config.VERBOSE, help="Detaylı debug çıktısı göster")
+    parser.add_argument("--reset", action="store_true", help="workspace/ içeriğini temizle")
+    parser.add_argument("--full", action="store_true", help="--reset ile memory/todolist dosyalarını da sıfırla")
     parser.add_argument("--no-install", action="store_true", help="Otomatik dependency kurulumunu atla")
     parser.add_argument("--no-server", action="store_true", help="Otomatik dev server başlatmayı atla")
     args = parser.parse_args()
 
+    config.VERBOSE = args.verbose
+
     print_header()
+    _print_verbose_status(args)
+
+    if args.full and not args.reset:
+        print("\n  HATA: --full yalnızca --reset ile birlikte kullanılabilir.")
+        sys.exit(1)
+
+    if args.reset:
+        if reset_workspace(full=args.full):
+            sys.exit(0)
+        sys.exit(0)
 
     # API key kontrolü
-    if not config.API_KEY and not args.list:
+    if not config.API_KEY and not args.list and not args.dry_run:
         print("\n  HATA: API Key bulunamadı!")
         print("  Çözüm 1: export ANTHROPIC_API_KEY='sk-ant-xxxxx'")
         print("  Çözüm 2: config.py dosyasında API_KEY'i ayarla")
@@ -713,24 +832,24 @@ def main():
     for agent_name, model in config.MODELS.items():
         print(f"    {agent_name:12s} → {model}")
 
-    # Task'ları oku
+    if args.list:
+        try:
+            all_tasks = read_todolist()
+        except FileNotFoundError as e:
+            print(f"\n{e}")
+            sys.exit(1)
+        print_task_list(all_tasks)
+        sys.exit(0)
+
     try:
-        from tools.file_tools import read_todolist
-        all_tasks = read_todolist()
-    except FileNotFoundError as e:
+        validation = validate_workspace()
+    except (FileNotFoundError, ValueError) as e:
         print(f"\n{e}")
         sys.exit(1)
 
+    all_tasks = validation["all_tasks"]
+    pending = validation["pending"]
     print_task_list(all_tasks)
-
-    if args.list:
-        sys.exit(0)
-
-    # Pending task'ları al
-    pending = get_pending_tasks()
-    if not pending:
-        print("  Tüm task'lar tamamlanmış! Yeni task ekle: workspace/todolist.md")
-        sys.exit(0)
 
     print(f"  {len(pending)} adet bekleyen task var.\n")
 

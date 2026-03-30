@@ -48,6 +48,9 @@ MODEL_PRICING_USD_PER_MILLION = {
 # PIPELINE AYARLARI
 # ============================================
 
+# Detaylı debug çıktıları
+VERBOSE = False
+
 # Reviewer onaylamazsa kaç kere Coder'a geri dönülsün
 MAX_REVIEW_ATTEMPTS = 3
 MAX_BUILD_RETRIES = 2

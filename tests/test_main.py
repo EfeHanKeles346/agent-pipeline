@@ -1,9 +1,9 @@
 import json
 import sys
+from pathlib import Path
 
 import main as pipeline_main
 import pytest
-import tools.file_tools as file_tools
 
 
 def _code_block(text: str) -> str:
@@ -378,14 +378,12 @@ def test_main_writes_pipeline_report_with_token_totals(monkeypatch: pytest.Monke
     monkeypatch.setattr(pipeline_main, "print_task_list", lambda tasks: None)
     monkeypatch.setattr(pipeline_main, "read_memory", lambda: "memory")
     monkeypatch.setattr(
-        file_tools,
-        "read_todolist",
-        lambda: [{"task": "Task A", "done": False, "line": 0}],
-    )
-    monkeypatch.setattr(
         pipeline_main,
-        "get_pending_tasks",
-        lambda: [{"task": "Task A"}],
+        "validate_workspace",
+        lambda: {
+            "all_tasks": [{"task": "Task A", "done": False, "line": 0}],
+            "pending": [{"task": "Task A", "done": False, "line": 0}],
+        },
     )
     monkeypatch.setattr(
         pipeline_main,
@@ -426,3 +424,149 @@ def test_main_writes_pipeline_report_with_token_totals(monkeypatch: pytest.Monke
     assert report["totals"]["tokens"]["output"] == 300
     assert report["totals"]["tokens"]["api_calls"] == 4
     assert report["totals"]["cost_usd"] == 0.0081
+
+
+def test_validate_workspace_raises_when_workspace_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    workspace = tmp_path / "missing-workspace"
+    monkeypatch.setattr(pipeline_main.config, "WORKSPACE_DIR", str(workspace))
+    monkeypatch.setattr(pipeline_main.config, "TODOLIST_FILE", str(workspace / "todolist.md"))
+    monkeypatch.setattr(pipeline_main.config, "MEMORY_FILE", str(workspace / "memory.md"))
+
+    with pytest.raises(FileNotFoundError):
+        pipeline_main.validate_workspace()
+
+
+def test_validate_workspace_creates_missing_memory_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    todo = workspace / "todolist.md"
+    todo.write_text("- [ ] Demo task\n", encoding="utf-8")
+
+    monkeypatch.setattr(pipeline_main.config, "WORKSPACE_DIR", str(workspace))
+    monkeypatch.setattr(pipeline_main.config, "TODOLIST_FILE", str(todo))
+    monkeypatch.setattr(pipeline_main.config, "MEMORY_FILE", str(workspace / "memory.md"))
+
+    result = pipeline_main.validate_workspace()
+
+    assert result["pending"][0]["task"] == "Demo task"
+    assert (workspace / "memory.md").exists()
+    assert "## Proje Tanımı" in (workspace / "memory.md").read_text(encoding="utf-8")
+
+
+def test_reset_workspace_preserves_memory_and_todolist_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    memory = workspace / "memory.md"
+    todo = workspace / "todolist.md"
+    extra_file = workspace / "app.py"
+    extra_dir = workspace / "src"
+    extra_dir.mkdir()
+    nested = extra_dir / "main.py"
+
+    memory.write_text("memory", encoding="utf-8")
+    todo.write_text("- [ ] Demo task\n", encoding="utf-8")
+    extra_file.write_text("print('x')\n", encoding="utf-8")
+    nested.write_text("print('nested')\n", encoding="utf-8")
+
+    clear_calls = []
+    monkeypatch.setattr(pipeline_main.config, "WORKSPACE_DIR", str(workspace))
+    monkeypatch.setattr(pipeline_main.config, "MEMORY_FILE", str(memory))
+    monkeypatch.setattr(pipeline_main.config, "TODOLIST_FILE", str(todo))
+    monkeypatch.setattr("builtins.input", lambda prompt: "y")
+    monkeypatch.setattr(pipeline_main, "clear_state", lambda: clear_calls.append(True))
+
+    result = pipeline_main.reset_workspace(full=False)
+
+    assert result is True
+    assert memory.exists()
+    assert todo.exists()
+    assert not extra_file.exists()
+    assert not extra_dir.exists()
+    assert clear_calls == [True]
+
+
+def test_reset_workspace_full_recreates_templates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    memory = workspace / "memory.md"
+    todo = workspace / "todolist.md"
+    extra_file = workspace / "app.py"
+
+    memory.write_text("old memory", encoding="utf-8")
+    todo.write_text("old todo", encoding="utf-8")
+    extra_file.write_text("print('x')\n", encoding="utf-8")
+
+    monkeypatch.setattr(pipeline_main.config, "WORKSPACE_DIR", str(workspace))
+    monkeypatch.setattr(pipeline_main.config, "MEMORY_FILE", str(memory))
+    monkeypatch.setattr(pipeline_main.config, "TODOLIST_FILE", str(todo))
+    monkeypatch.setattr("builtins.input", lambda prompt: "y")
+    monkeypatch.setattr(pipeline_main, "clear_state", lambda: None)
+
+    result = pipeline_main.reset_workspace(full=True)
+
+    assert result is True
+    assert not extra_file.exists()
+    assert "## Proje Tanımı" in memory.read_text(encoding="utf-8")
+    assert "- [ ] İlk taskını buraya yaz" in todo.read_text(encoding="utf-8")
+
+
+def test_main_verbose_dry_run_prints_extra_output(monkeypatch: pytest.MonkeyPatch, capsys):
+    monkeypatch.setattr(pipeline_main.config, "API_KEY", "")
+    monkeypatch.setattr(pipeline_main.config, "VERBOSE", False)
+    monkeypatch.setattr(pipeline_main, "print_header", lambda: None)
+    monkeypatch.setattr(pipeline_main, "print_task_list", lambda tasks: None)
+    monkeypatch.setattr(
+        pipeline_main,
+        "validate_workspace",
+        lambda: {
+            "all_tasks": [{"task": "Task A", "done": False}],
+            "pending": [{"task": "Task A", "done": False}],
+        },
+    )
+    monkeypatch.setattr(pipeline_main, "read_memory", lambda: "")
+    monkeypatch.setattr(
+        pipeline_main,
+        "run_single_task",
+        lambda **kwargs: {
+            "success": True,
+            "tokens": pipeline_main._finalize_token_usage(pipeline_main._empty_token_usage()),
+        },
+    )
+    monkeypatch.setattr(pipeline_main, "_write_pipeline_report", lambda report: "/tmp/pipeline_report.json")
+    monkeypatch.setattr(sys, "argv", ["main.py", "--dry-run", "--verbose"])
+
+    pipeline_main.main()
+
+    output = capsys.readouterr().out
+    assert "[VERBOSE]" in output
+
+
+def test_main_dry_run_without_verbose_has_no_verbose_output(monkeypatch: pytest.MonkeyPatch, capsys):
+    monkeypatch.setattr(pipeline_main.config, "API_KEY", "")
+    monkeypatch.setattr(pipeline_main.config, "VERBOSE", False)
+    monkeypatch.setattr(pipeline_main, "print_header", lambda: None)
+    monkeypatch.setattr(pipeline_main, "print_task_list", lambda tasks: None)
+    monkeypatch.setattr(
+        pipeline_main,
+        "validate_workspace",
+        lambda: {
+            "all_tasks": [{"task": "Task A", "done": False}],
+            "pending": [{"task": "Task A", "done": False}],
+        },
+    )
+    monkeypatch.setattr(pipeline_main, "read_memory", lambda: "")
+    monkeypatch.setattr(
+        pipeline_main,
+        "run_single_task",
+        lambda **kwargs: {
+            "success": True,
+            "tokens": pipeline_main._finalize_token_usage(pipeline_main._empty_token_usage()),
+        },
+    )
+    monkeypatch.setattr(pipeline_main, "_write_pipeline_report", lambda report: "/tmp/pipeline_report.json")
+    monkeypatch.setattr(sys, "argv", ["main.py", "--dry-run"])
+
+    pipeline_main.main()
+
+    output = capsys.readouterr().out
+    assert "[VERBOSE]" not in output

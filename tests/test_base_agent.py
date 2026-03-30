@@ -1,9 +1,11 @@
+import config
 from agents.base import BaseAgent
 
 
 def make_agent() -> BaseAgent:
     agent = BaseAgent.__new__(BaseAgent)
     agent.name = "test-agent"
+    agent.system_prompt = "test prompt"
     return agent
 
 
@@ -50,3 +52,24 @@ def test_parse_json_response_preserves_default_fields():
     assert result["approved"] is False
     assert result["issues"] == []
     assert "raw_response" in result
+
+
+def test_log_verbose_request_prints_preview(monkeypatch, capsys):
+    agent = make_agent()
+    monkeypatch.setattr(config, "VERBOSE", True)
+
+    agent._log_verbose_request("x" * 600)
+
+    output = capsys.readouterr().out
+    assert "System prompt boyutu" in output
+    assert "Giden mesaj önizlemesi" in output
+    assert "... (kırpıldı)" in output
+
+
+def test_log_verbose_response_is_silent_when_disabled(monkeypatch, capsys):
+    agent = make_agent()
+    monkeypatch.setattr(config, "VERBOSE", False)
+
+    agent._log_verbose_response("response body")
+
+    assert capsys.readouterr().out == ""

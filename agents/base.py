@@ -38,6 +38,30 @@ class BaseAgent:
                 f"prompts/{self.name}.md dosyasını oluştur."
             )
 
+    def _print_verbose_preview(self, label: str, text: str):
+        """Verbose modda içerik önizlemesi yazdır."""
+        if not config.VERBOSE:
+            return
+
+        preview = (text or "")[:500]
+        if len(text or "") > 500:
+            preview += "\n... (kırpıldı)"
+
+        print(f"  [VERBOSE] {label} ({len(text or '')} karakter):")
+        print(preview if preview else "(boş)")
+
+    def _log_verbose_request(self, full_message: str):
+        """Verbose modda giden isteğin özetini yazdır."""
+        if not config.VERBOSE:
+            return
+
+        print(f"  [VERBOSE] System prompt boyutu: {len(self.system_prompt)} karakter")
+        self._print_verbose_preview("Giden mesaj önizlemesi", full_message)
+
+    def _log_verbose_response(self, response_text: str):
+        """Verbose modda gelen yanıtın özetini yazdır."""
+        self._print_verbose_preview("Gelen yanıt önizlemesi", response_text)
+
     def run(self, user_message: str, context: str = "") -> str:
         """
         Agent'ı çalıştır. Rate limit ve server hatalarında exponential backoff ile retry yapar.
@@ -57,6 +81,7 @@ class BaseAgent:
         print(f"\n{'='*60}")
         print(f"  {self.name.upper()} agent çalışıyor... (model: {self.model})")
         print(f"{'='*60}")
+        self._log_verbose_request(full_message)
 
         for attempt in range(MAX_API_RETRIES):
             try:
@@ -77,6 +102,7 @@ class BaseAgent:
                 self.total_output_tokens += output_tokens
                 self.total_api_calls += 1
                 print(f"  Tokens: {input_tokens} input + {output_tokens} output")
+                self._log_verbose_response(result)
                 print(f"  {self.name.upper()} tamamlandı.")
 
                 return result
