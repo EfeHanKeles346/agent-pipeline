@@ -176,4 +176,4 @@ Test kapsamı şu an kritik parser ve tool fonksiyonlarına odaklanır:
 - `.pipeline_state.json` yarım kalan task'ı toparlamak için kullanılır
 - Repo yalnızca `workspace/memory.md` ve `workspace/todolist.md` şablonlarını taşır
 - Pipeline'ın `workspace/` içine ürettiği proje dosyaları varsayılan olarak git'e dahil edilmez
-- Yol haritası ve kabul kriterleri için [`improvements.md`](./improvements.md) dosyasına bakın
+- Geçiş özeti için [`version_transition.md`](./version_transition.md), yeni roadmap ve sonraki geliştirme alanları için [`improvements.md`](./improvements.md) dosyalarına bakın
